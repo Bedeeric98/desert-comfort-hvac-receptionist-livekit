@@ -1,0 +1,1884 @@
+{
+  "name": "Desert Comfort LiveKit Drift Watchman",
+  "nodes": [
+    {
+      "id": "hb-schedule",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -800,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hb-get-lastseen",
+      "name": "Get Last Heartbeat",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "onError": "continueRegularOutput",
+      "position": [
+        -560,
+        0
+      ],
+      "parameters": {
+        "operation": "get",
+        "propertyName": "lastSeenRaw",
+        "key": "livekit-heartbeat:last_seen",
+        "keyType": "string",
+        "options": {}
+      }
+    },
+    {
+      "id": "hb-get-alertactive",
+      "name": "Get Heartbeat Alert State",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "onError": "continueRegularOutput",
+      "position": [
+        -320,
+        0
+      ],
+      "parameters": {
+        "operation": "get",
+        "propertyName": "alertActiveRaw",
+        "key": "livekit-heartbeat:alert_active",
+        "keyType": "string",
+        "options": {}
+      }
+    },
+    {
+      "id": "hb-evaluate",
+      "name": "Evaluate Heartbeat Staleness",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const lastSeenRaw = (($('Get Last Heartbeat').item.json) || {}).lastSeenRaw || null;\nconst alertActiveRaw = (($('Get Heartbeat Alert State').item.json) || {}).alertActiveRaw || null;\nconst ALERT_AFTER_MINUTES = 20;\nconst nowMs = Date.now();\nlet minutesSince = null;\nif (lastSeenRaw) {\n  const t = Date.parse(lastSeenRaw);\n  if (!isNaN(t)) minutesSince = (nowMs - t) / 60000;\n}\nconst isDown = minutesSince === null || minutesSince > ALERT_AFTER_MINUTES;\nconst wasAlerted = Boolean(alertActiveRaw);\nlet decision = 'no_change';\nif (isDown && !wasAlerted) decision = 'alert_down';\nelse if (!isDown && wasAlerted) decision = 'alert_recovered';\nreturn [{ json: { decision, minutes_since: minutesSince, last_seen: lastSeenRaw, is_down: isDown } }];"
+      }
+    },
+    {
+      "id": "hb-if-down",
+      "name": "If Heartbeat Should Alert Down",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        160,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hb-d-1",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "alert_down",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "hb-slack-down",
+      "name": "Notify Admin Slack Agent Down",
+      "disabled": false,
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        400,
+        -160
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "YOUR_SLACK_USER_ID",
+          "mode": "list"
+        },
+        "text": "=🛑 *Desert Comfort LiveKit — Agent appears DOWN*\n\n*Last heartbeat seen:* {{ $json.last_seen || 'never' }}\n*Minutes since:* {{ $json.minutes_since !== null ? Math.round($json.minutes_since) : 'unknown' }}\n*What happened:* The agent has not pinged its heartbeat webhook in over 20 minutes. It may be crashed, restarted without the service coming back up, or network-isolated from n8n.\n*Action Required:* SSH in and check `sudo systemctl status desert-comfort-agent.service`. This alert will not repeat until the agent recovers.",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "hb-redis-set-alert",
+      "name": "Set Heartbeat Alert Active",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "onError": "continueRegularOutput",
+      "position": [
+        640,
+        -160
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "livekit-heartbeat:alert_active",
+        "value": "1",
+        "keyType": "string",
+        "expire": true,
+        "ttl": 86400
+      }
+    },
+    {
+      "id": "hb-if-recovered",
+      "name": "If Heartbeat Should Alert Recovered",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hb-r-1",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "alert_recovered",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "hb-slack-recovered",
+      "name": "Notify Admin Slack Agent Recovered",
+      "disabled": false,
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        640,
+        40
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "YOUR_SLACK_USER_ID",
+          "mode": "list"
+        },
+        "text": "=✅ *Desert Comfort LiveKit — Agent back up*\n\n*Last heartbeat seen:* {{ $json.last_seen }}\n*What happened:* The agent resumed sending its heartbeat after an outage. No action needed unless calls were missed during the gap — check the outbox/ledger for that window.",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "hb-redis-clear-alert",
+      "name": "Clear Heartbeat Alert Active",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "onError": "continueRegularOutput",
+      "position": [
+        880,
+        40
+      ],
+      "parameters": {
+        "operation": "delete",
+        "key": "livekit-heartbeat:alert_active",
+        "options": {}
+      }
+    },
+    {
+      "id": "dw-schedule",
+      "name": "Every 4 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -800,
+        400
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d1-search",
+      "name": "Search Booked Contacts GHL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        -560,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"locationId\": \"YOUR_GHL_LOCATION_ID\",\n  \"page\": 1,\n  \"pageLimit\": 100,\n  \"filters\": [\n    {\n      \"field\": \"customFields.YOUR_GHL_FIELD_ID_STAGE\",\n      \"operator\": \"eq\",\n      \"value\": \"booked\"\n    }\n  ]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "d1-extract",
+      "name": "Extract Booked Contacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $json;\nif (r.statusCode !== 200 || !r.body) return [];\nconst contacts = r.body.contacts || [];\nreturn contacts.map((c) => ({ json: { contact_id: c.id, contact_name: `${c.firstName || ''} ${c.lastName || ''}`.trim() } }));"
+      }
+    },
+    {
+      "id": "d1-get-appts",
+      "name": "Get Contact Appointments For Drift Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        -80,
+        320
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://services.leadconnectorhq.com/contacts/{{ $json.contact_id }}/appointments",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "d1-evaluate",
+      "name": "Evaluate Direction1 Drift",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        320
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const calIds = ['YOUR_GHL_STANDARD_CALENDAR_ID', 'YOUR_GHL_EMERGENCY_CALENDAR_ID'];\nconst source = $('Extract Booked Contacts').item.json;\nconst contactId = source.contact_id;\nconst contactName = source.contact_name || '';\nconst ar = $json;\nif (ar.statusCode !== 200 || !ar.body) {\n  return { json: { action: 'alert', contact_id: contactId, contact_name: contactName,\n    reason: `could not read appointments for contact ${contactId} (HTTP ${ar.statusCode})` } };\n}\nconst events = ar.body.events || [];\nconst nowMs = Date.now();\nconst dead = ['cancelled', 'canceled', 'noshow', 'invalid'];\nconst norm = (a) => String(a.appointmentStatus || a.appoinmentStatus || '').toLowerCase().trim();\nconst tracked = events.filter((a) => calIds.includes(a.calendarId));\nconst liveFuture = tracked.find((a) => Date.parse(a.startTime) > nowMs && !dead.includes(norm(a)));\nif (liveFuture) return { json: { action: 'none', contact_id: contactId, contact_name: contactName } };\n\nif (!tracked.length) {\n  return { json: { action: 'correct', event: 'appt_cancelled', contact_id: contactId, contact_name: contactName,\n    appointment_id: '', calendar_id: '', start_time: '', status: 'none', date_updated: new Date().toISOString(),\n    reason: 'stage says booked but contact has no appointment at all on our calendars' } };\n}\n\nlet appt = tracked[0];\nfor (const a of tracked) if (Date.parse(a.dateUpdated) > Date.parse(appt.dateUpdated)) appt = a;\nconst status = norm(appt);\nconst map = { showed: 'appt_showed', completed: 'appt_completed', cancelled: 'appt_cancelled', canceled: 'appt_cancelled',\n  noshow: 'appt_noshow', 'no-show': 'appt_noshow', invalid: 'appt_cancelled' };\nconst event = map[status] || '';\nif (!event) {\n  return { json: { action: 'alert', contact_id: contactId, contact_name: contactName,\n    reason: `most recently updated tracked appointment ${appt.id} is '${status}' with no live future booking -- ambiguous, needs a human look`,\n    appointment_id: appt.id || '', status } };\n}\nreturn { json: { action: 'correct', event, contact_id: contactId, contact_name: contactName,\n  appointment_id: appt.id || '', calendar_id: appt.calendarId || '', start_time: appt.startTime || '',\n  status, date_updated: appt.dateUpdated || '' } };"
+      }
+    },
+    {
+      "id": "d1-if-correct",
+      "name": "If Direction1 Should Correct",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "d1-c-1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "correct",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d1-build-event",
+      "name": "Build Direction1 State Event",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        640,
+        160
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1-bse-1",
+              "name": "event",
+              "type": "string",
+              "value": "={{ $json.event }}"
+            },
+            {
+              "id": "d1-bse-2",
+              "name": "source",
+              "type": "string",
+              "value": "appointment_status"
+            },
+            {
+              "id": "d1-bse-3",
+              "name": "contact_id",
+              "type": "string",
+              "value": "={{ $json.contact_id }}"
+            },
+            {
+              "id": "d1-bse-4",
+              "name": "event_id",
+              "type": "string",
+              "value": "={{ $json.appointment_id || 'none' }}:{{ $json.date_updated }}"
+            },
+            {
+              "id": "d1-bse-5",
+              "name": "occurred_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "d1-bse-6",
+              "name": "detail",
+              "type": "object",
+              "value": "={{ { appointment: { id: $json.appointment_id, calendar_id: $json.calendar_id, start_time: $json.start_time, status: $json.status } } }}"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    },
+    {
+      "id": "d1-call-sw",
+      "name": "Call State Writer For Direction1 Drift",
+      "disabled": false,
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "onError": "continueErrorOutput",
+      "position": [
+        880,
+        160
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "YOUR_STATE_WRITER_WORKFLOW_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "d1-slack-corrected",
+      "name": "Notify Admin Slack Direction1 Drift Corrected",
+      "disabled": false,
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        1120,
+        80
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "YOUR_SLACK_USER_ID",
+          "mode": "list"
+        },
+        "text": "=🔧 *Desert Comfort LiveKit — Drift Watchman corrected a stale stage*\n\n*Contact:* {{ $('Build Direction1 State Event').item.json.contact_id }}\n*Event applied:* {{ $('Build Direction1 State Event').item.json.event }}\n*Decision:* {{ $json.decision || 'unknown' }} ({{ $json.reason || '' }})\n*What happened:* This contact's stage still said 'booked' but GHL's real appointment data no longer supported that. The real status was re-applied through the same logic Step 7 uses.\n*Action Required:* None, this is informational. Spot-check the contact in GHL if anything looks off.",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "d1-if-alert",
+      "name": "If Direction1 Should Alert",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        640,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "d1-a-1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "alert",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d1-slack-alert",
+      "name": "Notify Admin Slack Direction1 Needs Review",
+      "disabled": false,
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        880,
+        400
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "YOUR_SLACK_USER_ID",
+          "mode": "list"
+        },
+        "text": "=⚠️ *Desert Comfort LiveKit — Drift Watchman found something ambiguous*\n\n*Contact:* {{ $json.contact_name || '' }} ({{ $json.contact_id }})\n*Appointment:* {{ $json.appointment_id || 'n/a' }}\n*Why it needs a human:* {{ $json.reason }}\n*What happened:* This contact's stage says 'booked' but the real GHL data could not be safely auto-corrected. Nothing was changed.\n*Action Required:* Check this contact and appointment in GHL and fix manually if needed.",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "d2-cal-list",
+      "name": "Build Calendar List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -560,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [\n  { json: { calendar_id: 'YOUR_GHL_STANDARD_CALENDAR_ID', calendar_type: 'standard' } },\n  { json: { calendar_id: 'YOUR_GHL_EMERGENCY_CALENDAR_ID', calendar_type: 'emergency' } },\n];"
+      }
+    },
+    {
+      "id": "d2-get-events",
+      "name": "Get Calendar Events For Drift Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        -320,
+        600
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://services.leadconnectorhq.com/calendars/events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-04-15"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "locationId",
+              "value": "YOUR_GHL_LOCATION_ID"
+            },
+            {
+              "name": "calendarId",
+              "value": "={{ $json.calendar_id }}"
+            },
+            {
+              "name": "startTime",
+              "value": "={{ Date.now() - 7*24*3600*1000 }}"
+            },
+            {
+              "name": "endTime",
+              "value": "={{ Date.now() + 14*24*3600*1000 }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "d2-flatten",
+      "name": "Flatten Calendar Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const dead = ['cancelled', 'canceled', 'noshow', 'invalid'];\nconst calList = $('Build Calendar List').all();\nconst items = $input.all();\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  const r = items[i].json;\n  const calType = (calList[i] && calList[i].json.calendar_type) || 'unknown';\n  if (r.statusCode !== 200 || !r.body) continue;\n  const events = r.body.events || [];\n  for (const e of events) {\n    const status = String(e.appointmentStatus || e.appoinmentStatus || '').toLowerCase().trim();\n    if (dead.includes(status)) continue;\n    out.push({ json: { id: e.id, contact_id: e.contactId, calendar_id: e.calendarId, calendar_type: calType,\n      status, startTime: e.startTime, dateUpdated: e.dateUpdated } });\n  }\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "d2-get-contact",
+      "name": "Get Contact For Direction2 Drift Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        160,
+        600
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://services.leadconnectorhq.com/contacts/{{ $json.contact_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "d2-evaluate",
+      "name": "Evaluate Direction2 Drift",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        600
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const stageFieldId = 'YOUR_GHL_FIELD_ID_STAGE';\nconst evt = $('Flatten Calendar Events').item.json;\nconst cr = $json;\nif (cr.statusCode !== 200 || !cr.body || !cr.body.contact) {\n  return { json: { action: 'alert', contact_id: evt.contact_id, appointment_id: evt.id,\n    reason: `could not read contact ${evt.contact_id} (HTTP ${cr.statusCode})` } };\n}\nconst fields = cr.body.contact.customFields || [];\nconst f = fields.find((x) => x.id === stageFieldId);\nconst stage = String((f ? (f.value !== undefined ? f.value : f.fieldValue) : '') || '').trim().toLowerCase();\nconst ok = ['booked', 'served'];\nif (ok.includes(stage)) return { json: { action: 'none', contact_id: evt.contact_id } };\nreturn { json: { action: 'alert', contact_id: evt.contact_id, appointment_id: evt.id, calendar_type: evt.calendar_type,\n  status: evt.status, start_time: evt.startTime, stage,\n  reason: `calendar has a real '${evt.status}' appointment but the contact's stage is '${stage || \"(blank)\"}'` } };"
+      }
+    },
+    {
+      "id": "d2-if-alert",
+      "name": "If Direction2 Needs Alert",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        640,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "d2-a-1",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "alert",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d2-slack-alert",
+      "name": "Notify Admin Slack Direction2 Drift Found",
+      "disabled": false,
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        880,
+        600
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "YOUR_SLACK_USER_ID",
+          "mode": "list"
+        },
+        "text": "=⚠️ *Desert Comfort LiveKit — Drift Watchman: real booking not reflected in our stage*\n\n*Contact:* {{ $json.contact_id }}\n*Appointment:* {{ $json.appointment_id }} ({{ $json.calendar_type }} calendar, status '{{ $json.status }}', {{ $json.start_time }})\n*Contact's current stage:* {{ $json.stage || '(blank)' }}\n*What happened:* GHL's calendar has a real, active appointment for this contact, but our stage field never reflects it as booked (or served). Most likely cause: a missed appointment-status webhook, or the appointment was created directly in GHL without going through the agent.\n*Action Required:* Check this contact and appointment in GHL. Nothing was changed automatically.",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "84637a91-4d5b-4f48-8b39-288a111a0abb",
+      "name": "Every Day At 4am Dormant Sweep",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -800,
+        900
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 4
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5b92c20b-da21-40b7-8b59-c30c687fde72",
+      "name": "Get Dormant Sweep Config",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -560,
+        900
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_CONFIG_TABLE_ID"
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "id": "78a041be-411f-41f7-863f-ee45dd3aefb9",
+      "name": "Aggregate Dormant Sweep Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        900
+      ],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map((i) => i.json).filter((r) => r && r.key);\nconst row = rows.find((r) => r.key === 'dormant_after_days');\nconst n = row ? parseInt(row.value, 10) : NaN;\nreturn [{ json: { dormant_after_days: (Number.isFinite(n) && n > 0) ? n : null } }];"
+      }
+    },
+    {
+      "id": "cbe6d9b0-7e7f-4dab-91c7-85e0481bdbae",
+      "name": "Search Lead Contacts For Dormant Sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        -80,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"locationId\": \"YOUR_GHL_LOCATION_ID\",\n  \"page\": 1,\n  \"pageLimit\": 100,\n  \"filters\": [\n    {\n      \"field\": \"customFields.YOUR_GHL_FIELD_ID_STAGE\",\n      \"operator\": \"eq\",\n      \"value\": \"lead\"\n    }\n  ]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "094c03f4-f5e2-4fd7-80b5-4bde8b9e14a7",
+      "name": "Extract Lead Contacts For Dormant Sweep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $json;\nif (r.statusCode !== 200 || !r.body) return [];\nconst contacts = r.body.contacts || [];\nreturn contacts.map((c) => ({ json: { contact_id: c.id, contact_name: `${c.firstName || ''} ${c.lastName || ''}`.trim(), stage: 'lead' } }));"
+      }
+    },
+    {
+      "id": "b402f527-bdd1-4654-a084-371eb81503cf",
+      "name": "Search Qualified Contacts For Dormant Sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        400,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"locationId\": \"YOUR_GHL_LOCATION_ID\",\n  \"page\": 1,\n  \"pageLimit\": 100,\n  \"filters\": [\n    {\n      \"field\": \"customFields.YOUR_GHL_FIELD_ID_STAGE\",\n      \"operator\": \"eq\",\n      \"value\": \"qualified\"\n    }\n  ]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "f468c82f-ecc2-4161-80b2-719730c79a80",
+      "name": "Extract Qualified Contacts For Dormant Sweep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $json;\nif (r.statusCode !== 200 || !r.body) return [];\nconst contacts = r.body.contacts || [];\nreturn contacts.map((c) => ({ json: { contact_id: c.id, contact_name: `${c.firstName || ''} ${c.lastName || ''}`.trim(), stage: 'qualified' } }));"
+      }
+    },
+    {
+      "id": "6f1c82c9-b43a-405a-a0e3-bb3b687af447",
+      "name": "Search Served Contacts For Dormant Sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        880,
+        900
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://services.leadconnectorhq.com/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Version",
+              "value": "2021-07-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"locationId\": \"YOUR_GHL_LOCATION_ID\",\n  \"page\": 1,\n  \"pageLimit\": 100,\n  \"filters\": [\n    {\n      \"field\": \"customFields.YOUR_GHL_FIELD_ID_STAGE\",\n      \"operator\": \"eq\",\n      \"value\": \"served\"\n    }\n  ]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "3b179c5f-4dd2-460d-a25c-708944954eb8",
+      "name": "Extract Served Contacts For Dormant Sweep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        900
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $json;\nif (r.statusCode !== 200 || !r.body) return [];\nconst contacts = r.body.contacts || [];\nreturn contacts.map((c) => ({ json: { contact_id: c.id, contact_name: `${c.firstName || ''} ${c.lastName || ''}`.trim(), stage: 'served' } }));"
+      }
+    },
+    {
+      "id": "fef6242b-6a42-4007-9cab-2cfabb9a2dd1",
+      "name": "Get Ledger Rows For Dormant Sweep",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1360,
+        900
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_CONTACT_EVENTS_TABLE_ID"
+        },
+        "returnAll": true
+      }
+    },
+    {
+      "id": "525f4eaf-0e4f-4da8-834e-e9be3033d157",
+      "name": "Evaluate Dormant Sweep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        1080
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cfgRows = $('Aggregate Dormant Sweep Config').all().map((i) => i.json);\nconst days = cfgRows[0] && cfgRows[0].dormant_after_days;\nif (!days) {\n  return [{ json: { config_error: true, message: \"dormant_after_days missing or invalid in desertcomfort_config - sweep skipped, nobody moved\" } }];\n}\nconst ledgerRows = $('Get Ledger Rows For Dormant Sweep').all().map((i) => i.json);\nconst lastSeen = {};\nfor (const row of ledgerRows) {\n  const cid = row.contact_id;\n  if (!cid) continue;\n  const t = Date.parse(row.occurred_at);\n  if (!Number.isFinite(t)) continue;\n  if (!lastSeen[cid] || t > lastSeen[cid]) lastSeen[cid] = t;\n}\nconst candidates = [\n  ...$('Extract Lead Contacts For Dormant Sweep').all().map((i) => i.json),\n  ...$('Extract Qualified Contacts For Dormant Sweep').all().map((i) => i.json),\n  ...$('Extract Served Contacts For Dormant Sweep').all().map((i) => i.json),\n];\nconst cutoff = Date.now() - days * 24 * 3600 * 1000;\nconst out = [];\nfor (const c of candidates) {\n  const last = lastSeen[c.contact_id];\n  if (last === undefined) continue;\n  if (last < cutoff) {\n    out.push({ json: {\n      contact_id: c.contact_id,\n      contact_name: c.contact_name,\n      from_stage: c.stage,\n      days_since_activity: Math.floor((Date.now() - last) / (24 * 3600 * 1000)),\n      last_activity_at: new Date(last).toISOString(),\n    } });\n  }\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "8e650f77-d4ac-4db0-8d67-01317141ad6b",
+      "name": "If Dormant Sweep Config OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1840,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 3,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ds-if-1",
+              "leftValue": "={{ $json.config_error === true }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "8bc811e8-1abc-4d87-87e1-1b02f9c4dbfd",
+      "name": "Build Dormant Sweep State Event",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2080,
+        820
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ds-bse-1",
+              "name": "event",
+              "type": "string",
+              "value": "no_activity_desertcomfort"
+            },
+            {
+              "id": "ds-bse-2",
+              "name": "source",
+              "type": "string",
+              "value": "drift_watchman_dormant_sweep"
+            },
+            {
+              "id": "ds-bse-3",
+              "name": "contact_id",
+              "type": "string",
+              "value": "={{ $json.contact_id }}"
+            },
+            {
+              "id": "ds-bse-4",
+              "name": "event_id",
+              "type": "string",
+              "value": "={{ 'dormant:' + $json.contact_id + ':' + $now.toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "id": "ds-bse-5",
+              "name": "occurred_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            },
+            {
+              "id": "ds-bse-6",
+              "name": "detail",
+              "type": "object",
+              "value": "={{ { from_stage: $json.from_stage, days_since_activity: $json.days_since_activity, last_activity_at: $json.last_activity_at } }}"
+            }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    },
+    {
+      "id": "3a79cb5c-db8f-42fd-b233-daf3ceb2e7fa",
+      "name": "Call State Writer For Dormant Sweep",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "onError": "continueErrorOutput",
+      "position": [
+        2320,
+        820
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "YOUR_STATE_WRITER_WORKFLOW_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "f8ce6fb6-eee4-468b-9e4f-d11f5f8f442c",
+      "name": "Notify Admin Slack Dormant Sweep Applied",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "position": [
+        2560,
+        760
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "YOUR_SLACK_USER_ID",
+          "mode": "list"
+        },
+        "text": "=💤 *Desert Comfort LiveKit — Drift Watchman moved a contact to dormant*\n\n*Contact:* {{ $('Build Dormant Sweep State Event').item.json.contact_id }}\n*From stage:* {{ $('Build Dormant Sweep State Event').item.json.detail.from_stage }}\n*Days since last activity:* {{ $('Build Dormant Sweep State Event').item.json.detail.days_since_activity }}\n*Decision:* {{ $json.decision || 'unknown' }} ({{ $json.reason || '' }})\n*Action Required:* None, this is informational. The contact wakes back up automatically on their next real inbound call.",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "2c0a32d1-3e1e-4454-b8fb-8b39f35bc8b6",
+      "name": "Merge Dormant Sweep Inputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1600,
+        900
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 4
+      }
+    },
+    {
+      "id": "f7e365d9-b853-4c38-bcbb-be8f8261c5fa",
+      "name": "Direction1 State Writer Failed — Build Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1120,
+        280
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "execution",
+              "type": "object",
+              "value": "={{ { id: $execution.id, url: 'https://your-n8n-instance.example.com/workflow/' + $workflow.id + '/executions/' + $execution.id, lastNodeExecuted: $prevNode.name, error: { message: (($json.error && $json.error.message) || $json.error || 'unknown'), httpCode: (($json.error && $json.error.httpCode) || '') } } }}"
+            },
+            {
+              "id": "e2",
+              "name": "workflow",
+              "type": "object",
+              "value": "={{ { id: $workflow.id, name: $workflow.name } }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9ef9f56b-7116-4d49-83fc-a4f5938c3475",
+      "name": "Notify Admin Slack Direction1 State Writer Failed",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1120,
+        400
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "YOUR_ERROR_WORKFLOW_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "4377c12c-5f9d-40e1-9034-f1381894cd38",
+      "name": "Dormant Sweep State Writer Failed — Build Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2560,
+        980
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "execution",
+              "type": "object",
+              "value": "={{ { id: $execution.id, url: 'https://your-n8n-instance.example.com/workflow/' + $workflow.id + '/executions/' + $execution.id, lastNodeExecuted: $prevNode.name, error: { message: (($json.error && $json.error.message) || $json.error || 'unknown'), httpCode: (($json.error && $json.error.httpCode) || '') } } }}"
+            },
+            {
+              "id": "e2",
+              "name": "workflow",
+              "type": "object",
+              "value": "={{ { id: $workflow.id, name: $workflow.name } }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e60aa7f1-0edf-4333-8b74-c7f633cb5f52",
+      "name": "Notify Admin Slack Dormant Sweep State Writer Failed",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        2560,
+        1100
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "YOUR_ERROR_WORKFLOW_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "d862d387-6558-4a6d-beca-bebdec7d8975",
+      "name": "Dormant Sweep Config Error — Build Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2080,
+        1160
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "execution",
+              "type": "object",
+              "value": "={{ { id: $execution.id, url: 'https://your-n8n-instance.example.com/workflow/' + $workflow.id + '/executions/' + $execution.id, lastNodeExecuted: 'Evaluate Dormant Sweep', error: { message: ($json.message || 'dormant sweep config error'), httpCode: '' } } }}"
+            },
+            {
+              "id": "e2",
+              "name": "workflow",
+              "type": "object",
+              "value": "={{ { id: $workflow.id, name: $workflow.name } }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7f00d892-378a-495f-becb-c3a629a047d2",
+      "name": "Notify Admin Slack Dormant Sweep Config Error",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        2080,
+        1280
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "YOUR_ERROR_WORKFLOW_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Last Heartbeat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last Heartbeat": {
+      "main": [
+        [
+          {
+            "node": "Get Heartbeat Alert State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Heartbeat Alert State": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Heartbeat Staleness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Heartbeat Staleness": {
+      "main": [
+        [
+          {
+            "node": "If Heartbeat Should Alert Down",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If Heartbeat Should Alert Recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Heartbeat Should Alert Down": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Agent Down",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Admin Slack Agent Down": {
+      "main": [
+        [
+          {
+            "node": "Set Heartbeat Alert Active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Heartbeat Should Alert Recovered": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Agent Recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Admin Slack Agent Recovered": {
+      "main": [
+        [
+          {
+            "node": "Clear Heartbeat Alert Active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 4 Hours": {
+      "main": [
+        [
+          {
+            "node": "Search Booked Contacts GHL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Calendar List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Booked Contacts GHL": {
+      "main": [
+        [
+          {
+            "node": "Extract Booked Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Booked Contacts": {
+      "main": [
+        [
+          {
+            "node": "Get Contact Appointments For Drift Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Contact Appointments For Drift Check": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Direction1 Drift",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Direction1 Drift": {
+      "main": [
+        [
+          {
+            "node": "If Direction1 Should Correct",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If Direction1 Should Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Direction1 Should Correct": {
+      "main": [
+        [
+          {
+            "node": "Build Direction1 State Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Direction1 State Event": {
+      "main": [
+        [
+          {
+            "node": "Call State Writer For Direction1 Drift",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call State Writer For Direction1 Drift": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Direction1 Drift Corrected",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Direction1 State Writer Failed — Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Direction1 Should Alert": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Direction1 Needs Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Calendar List": {
+      "main": [
+        [
+          {
+            "node": "Get Calendar Events For Drift Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Events For Drift Check": {
+      "main": [
+        [
+          {
+            "node": "Flatten Calendar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten Calendar Events": {
+      "main": [
+        [
+          {
+            "node": "Get Contact For Direction2 Drift Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Contact For Direction2 Drift Check": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Direction2 Drift",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Direction2 Drift": {
+      "main": [
+        [
+          {
+            "node": "If Direction2 Needs Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Direction2 Needs Alert": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Direction2 Drift Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every Day At 4am Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Get Dormant Sweep Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Dormant Sweep Config": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Dormant Sweep Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Dormant Sweep Config": {
+      "main": [
+        [
+          {
+            "node": "Search Lead Contacts For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Qualified Contacts For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Served Contacts For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Ledger Rows For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Lead Contacts For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Extract Lead Contacts For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Qualified Contacts For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Extract Qualified Contacts For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Served Contacts For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Extract Served Contacts For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "If Dormant Sweep Config OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Dormant Sweep Config OK": {
+      "main": [
+        [
+          {
+            "node": "Build Dormant Sweep State Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dormant Sweep Config Error — Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dormant Sweep State Event": {
+      "main": [
+        [
+          {
+            "node": "Call State Writer For Dormant Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call State Writer For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Dormant Sweep Applied",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Dormant Sweep State Writer Failed — Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Lead Contacts For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Merge Dormant Sweep Inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Qualified Contacts For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Merge Dormant Sweep Inputs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Extract Served Contacts For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Merge Dormant Sweep Inputs",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Get Ledger Rows For Dormant Sweep": {
+      "main": [
+        [
+          {
+            "node": "Merge Dormant Sweep Inputs",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge Dormant Sweep Inputs": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Dormant Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Direction1 State Writer Failed — Build Report": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Direction1 State Writer Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dormant Sweep State Writer Failed — Build Report": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Dormant Sweep State Writer Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dormant Sweep Config Error — Build Report": {
+      "main": [
+        [
+          {
+            "node": "Notify Admin Slack Dormant Sweep Config Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {}
+}
